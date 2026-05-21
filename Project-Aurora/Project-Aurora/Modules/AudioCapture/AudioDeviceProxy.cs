@@ -190,12 +190,6 @@ public sealed class AudioDeviceProxy : IDisposable, IMMNotificationClient
 
             if (mmDevice == null) return;
 
-            if (mmDevice.ID == Device?.ID)
-            {
-                mmDevice.Dispose();
-                return;
-            }
-
             SetDevice(mmDevice.ID);
         });
     }

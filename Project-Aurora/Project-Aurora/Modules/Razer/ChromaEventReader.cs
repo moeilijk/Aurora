@@ -42,6 +42,9 @@ public sealed partial class ChromaEventReader : IDisposable
     /// <summary>The firing game's process image name (e.g. "007firstlight.exe"), resolved from the record PID.</summary>
     public string CurrentProcess { get; private set; } = string.Empty;
 
+    /// <summary>The firing game's PID from the newest record; 0 when the records carry none.</summary>
+    public int CurrentPid { get; private set; }
+
     private readonly System.Collections.Generic.Dictionary<int, string> _processByPid = new();
 
     private readonly Thread _thread;
@@ -106,7 +109,9 @@ public sealed partial class ChromaEventReader : IDisposable
         var ev = parts[2];
         var game = ExtractName(record);
         if (game.Length > 0) CurrentGame = game;
-        var proc = ResolveProcess(ExtractPid(record));
+        var pid = ExtractPid(record);
+        if (pid > 0) CurrentPid = pid;
+        var proc = ResolveProcess(pid);
         if (proc.Length > 0) CurrentProcess = proc;
         LastEvent = ev;
         EventReceived?.Invoke(this, new ChromaGameEvent(CurrentGame, ev));

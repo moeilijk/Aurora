@@ -35,10 +35,13 @@ public class SteelSeriesRgbNetDevice() : RgbNetDevice(true)
 
         foreach (var (_, trigger) in Provider.UpdateTriggers)
         {
+            // RGB.NET 3.2.0 consumes MaxUpdateRate as a PERIOD in seconds despite its name:
+            // UpdateFrequency = MaxUpdateRate and the update loop sleeps UpdateFrequency*1000 ms.
             if (trigger is DeviceUpdateTrigger deviceTrigger)
-                deviceTrigger.MaxUpdateRate = cap;
+                deviceTrigger.MaxUpdateRate = 1.0 / cap;
         }
-        Global.Logger.Information("{DeviceName} update rate capped at {Cap} updates/s", DeviceName, cap);
+        Global.Logger.Information("{DeviceName} update rate capped at {Cap} updates/s (period {Period}ms)",
+            DeviceName, cap, 1000 / cap);
     }
 
     protected override async Task ConfigureProvider(CancellationToken cancellationToken)

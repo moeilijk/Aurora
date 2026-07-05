@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <!-- Match Aurora's TFM (net10.0-windows10.0.19041.0); only needs Win32 P/Invoke -->
+        <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+        <!-- Allows building this Windows-targeted project from Linux/WSL -->
+        <EnableWindowsTargeting>true</EnableWindowsTargeting>
+        <Platforms>x64</Platforms>
+        <PlatformTarget>x64</PlatformTarget>
+        <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+        <SelfContained>false</SelfContained>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <!-- WinForms so the color mode can own a real foreground window (valid Aurora app detection) -->
+        <UseWindowsForms>true</UseWindowsForms>
+        <!-- Process name MUST be 007FirstLight.exe so Synapse/ChromaConnect recognises us as the game 007 -->
+        <AssemblyName>007FirstLight</AssemblyName>
+        <RootNamespace>ChromaEventEmitter</RootNamespace>
+        <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    </PropertyGroup>
+
+</Project>

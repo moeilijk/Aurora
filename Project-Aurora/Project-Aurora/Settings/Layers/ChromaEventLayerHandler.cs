@@ -37,6 +37,8 @@ public sealed class ChromaEventLayerHandler() : LayerHandler<ChromaEventLayerHan
     private ChromaPlayer? _idlePlayer; // the game's looping Idle base
     private DateTime _start = DateTime.UtcNow;
     private string _game = string.Empty;
+    private DateTime _lastAliveCheck = DateTime.MinValue;
+    private bool _sourceAlive = true;
 
     protected override UserControl CreateControl() => new();
 
@@ -66,6 +68,21 @@ public sealed class ChromaEventLayerHandler() : LayerHandler<ChromaEventLayerHan
         if (player is null)
             return EmptyLayer.Instance;
 
+        // The event buffer carries no "game exited" signal, so a looping animation (Idle) would play forever
+        // after the game closes. The records do carry the emitter's PID — stop when that process is gone.
+        if (!SourceAlive())
+        {
+            lock (_gate)
+            {
+                _player = null;
+                _idlePlayer = null;
+                _game = string.Empty;
+            }
+            Global.logger.Information("[ChromaEvent/Wyvrn] source process exited; stopping playback [{BuildTag}]",
+                ChromaEventModule.BuildTag);
+            return EmptyLayer.Instance;
+        }
+
         var frame = player.FrameAt((DateTime.UtcNow - start).TotalSeconds);
         var grid = player.Animation.Grid ?? new ChromaGrid(1, frame.Colors.Count);
 
@@ -89,6 +106,29 @@ public sealed class ChromaEventLayerHandler() : LayerHandler<ChromaEventLayerHan
         }
 
         return EffectLayer;
+    }
+
+    private bool SourceAlive()
+    {
+        var now = DateTime.UtcNow;
+        if ((now - _lastAliveCheck).TotalSeconds < 1)
+            return _sourceAlive;
+        _lastAliveCheck = now;
+
+        var pid = _reader?.CurrentPid ?? 0;
+        if (pid <= 0)
+            return _sourceAlive = true; // records without a PID: nothing to check against
+
+        try
+        {
+            using var _ = System.Diagnostics.Process.GetProcessById(pid);
+            _sourceAlive = true;
+        }
+        catch (ArgumentException)
+        {
+            _sourceAlive = false;
+        }
+        return _sourceAlive;
     }
 
     private void Wire()
@@ -144,6 +184,8 @@ public sealed class ChromaEventLayerHandler() : LayerHandler<ChromaEventLayerHan
                 e.Game, e.EventName, player.Animation.Frames.Count, player.Loop, ChromaEventModule.BuildTag);
             _player = player;
             _start = DateTime.UtcNow;
+            _sourceAlive = true;
+            _lastAliveCheck = DateTime.UtcNow;
         }
     }
 

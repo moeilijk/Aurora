@@ -86,8 +86,16 @@ public sealed partial class ChromaEventReader : IDisposable
                 var counter = (uint)Marshal.ReadInt32(p, 0);
                 if (counter == 0 || counter == _lastCounter) return;
 
+                // First poll: baseline only. Records already in the buffer predate this session
+                // (a stale MainMenu_On from a closed game would otherwise replay on every start).
+                if (_lastCounter == 0)
+                {
+                    _lastCounter = counter;
+                    return;
+                }
+
                 // Catch up over any records added since the last poll (bounded to one ring of slots).
-                var from = _lastCounter == 0 ? counter : _lastCounter + 1;
+                var from = _lastCounter + 1;
                 if (counter - from >= SlotCount) from = counter - (SlotCount - 1);
                 for (var c = from; c <= counter; c++)
                 {

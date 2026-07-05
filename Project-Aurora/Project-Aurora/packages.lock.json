@@ -207,6 +207,12 @@
         "resolved": "1.0.6-e190117-3",
         "contentHash": "S2IfWAo5bnXSgpr8o0LR3aMqo7QD83VQUPbgta6aOYIBq8M85Hpk8hVUco22GFhSRuf4ZhP8jUs2wPlO0Dbdow=="
       },
+      "Moeilijk.RazerSdkReader": {
+        "type": "Direct",
+        "requested": "[2.3.0, )",
+        "resolved": "2.3.0",
+        "contentHash": "xPeWyfLfDKK8JlVfTGInHLDeoUNXSSpDdn0afzsI7I2oLu1ubemyOo/em5P4Mcf4PNHjI+8hIFqhNuBxamtAnw=="
+      },
       "NAudio.Core": {
         "type": "Direct",
         "requested": "[2.3.0, )",
@@ -278,12 +284,6 @@
         "requested": "[0.1.3, )",
         "resolved": "0.1.3",
         "contentHash": "NSDy0QP+XAucd5n7x8NeS2f0MVjEBAqlQ/0XpJ8IjgfRyOoKUKmNHvkN02XkhxV8tqAOPDBB8C36AjFm1Gq92w=="
-      },
-      "RazerSdkReader": {
-        "type": "Direct",
-        "requested": "[2.2.0, )",
-        "resolved": "2.2.0",
-        "contentHash": "LRMgV2yZR/1A3TqFBmQykZsqwIYJdZ2WQGwRU9vfHRcWjseppguVD0Kkbt8qglmkrgNDsYh/G4yBx75MlcxPgA=="
       },
       "RGB.NET.Devices.CorsairLegacy": {
         "type": "Direct",
@@ -450,6 +450,12 @@
         "requested": "[3.5.50211.1, )",
         "resolved": "3.5.50211.1",
         "contentHash": "CJ2hQCO4gBlMd4OyagGwVYETd99OsG0cn7d0ZlJFLlTK9R5qcLQp4R8+Tp3ZL6Lf3JxZhMTWWsJG0+4KJ97Spg=="
+      },
+      "WyvrnChroma": {
+        "type": "Direct",
+        "requested": "[0.1.0, )",
+        "resolved": "0.1.0",
+        "contentHash": "69PE4dAy9P0y2vxqx6qXKCJSdDr6pUQPl1PJGyBIFgm02Qnbz10O651P7XOjT2RxVQILhpy424CMzdbxkYskbQ=="
       },
       "AvalonEdit": {
         "type": "Transitive",

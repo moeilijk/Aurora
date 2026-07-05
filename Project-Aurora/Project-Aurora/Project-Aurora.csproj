@@ -120,7 +120,8 @@
             <HintPath>.\RGB.NET.Core.dll</HintPath>
             <Private>true</Private>
         </Reference>
-        <PackageReference Include="RazerSdkReader" Version="2.2.0" />
+        <PackageReference Include="Moeilijk.RazerSdkReader" Version="2.3.0" />
+        <PackageReference Include="WyvrnChroma" Version="0.1.0" />
     </ItemGroup>
 
     <ItemGroup>

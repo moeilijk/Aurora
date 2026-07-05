@@ -209,9 +209,9 @@
       },
       "Moeilijk.RazerSdkReader": {
         "type": "Direct",
-        "requested": "[2.3.0, )",
-        "resolved": "2.3.0",
-        "contentHash": "xPeWyfLfDKK8JlVfTGInHLDeoUNXSSpDdn0afzsI7I2oLu1ubemyOo/em5P4Mcf4PNHjI+8hIFqhNuBxamtAnw=="
+        "requested": "[2.3.1, )",
+        "resolved": "2.3.1",
+        "contentHash": "Q0bFGdjCHtDyBfkRoeq8aRhjRfBQwkfmxo9ieEFqAgTxkNmahV8RtLlxOuQjNkBmTSkzpfgpNapHD26/dMfSSw=="
       },
       "NAudio.Core": {
         "type": "Direct",

@@ -1,4 +1,5 @@
 ﻿using AuroraDeviceManager.Utils;
+using Common.Devices;
 using IronPython.Runtime.Operations;
 using RGB.NET.Core;
 using RGB.NET.Devices.SteelSeries;
@@ -15,6 +16,30 @@ public class SteelSeriesRgbNetDevice() : RgbNetDevice(true)
     protected override SteelSeriesDeviceProvider Provider => SteelSeriesDeviceProvider.Instance;
 
     public override string DeviceName => "SteelSeries (RGB.NET)";
+
+    protected override void RegisterVariables(VariableRegistry variableRegistry)
+    {
+        base.RegisterVariables(variableRegistry);
+
+        variableRegistry.Register($"{DeviceName}_update_rate_cap", 15, "Max updates per second (0 = uncapped)",
+            remark: "GameSense-driven per-key lighting flickers when repainted too often (gamesense-sdk#34)");
+    }
+
+    protected override void OnInitialized()
+    {
+        base.OnInitialized();
+
+        var cap = Global.DeviceConfig.VarRegistry.GetVariable<int>($"{DeviceName}_update_rate_cap");
+        if (cap <= 0)
+            return;
+
+        foreach (var (_, trigger) in Provider.UpdateTriggers)
+        {
+            if (trigger is DeviceUpdateTrigger deviceTrigger)
+                deviceTrigger.MaxUpdateRate = cap;
+        }
+        Global.Logger.Information("{DeviceName} update rate capped at {Cap} updates/s", DeviceName, cap);
+    }
 
     protected override async Task ConfigureProvider(CancellationToken cancellationToken)
     {

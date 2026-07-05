@@ -96,54 +96,34 @@ public sealed partial class ChromaCaptureLayerHandler() : LayerHandler<ChromaCap
             _b[i] = (byte)((word >> 16) & 0xFF);
         }
 
+        // The game renders on Razer's EXTENDED grid (8×24), classic 6×22 keyboard block centred inside it.
+        // Map each key straight to its exact captured cell at that offset — NO resample — same as the Wyvrn
+        // event layer, so a captured frame lands identically to how Synapse lights it.
+        const int rowOffset = (SrcRows - DstRows) / 2;  // 1
+        const int colOffset = (SrcCols - DstCols) / 2;  // 1
+
         foreach (var key in Keys)
         {
             if (!RazerLayoutMap.GenericKeyboard.TryGetValue(key, out var pos))
                 continue;
 
-            // Bilinear-sample the 8×24 field at this key's proportional position in the 6×22 grid, then set it
-            // exactly like Chroma Connect (RazerLayerHandler).
-            var color = SampleBilinear(pos[0], pos[1]);
+            var sr = pos[0] + rowOffset;
+            var sc = pos[1] + colOffset;
+            if (sr < 0 || sr >= SrcRows || sc < 0 || sc >= SrcCols)
+                continue;
+            var i = sr * SrcCols + sc;
+            var color = CommonColorUtils.FastColor(_r[i], _g[i], _b[i]);
             EffectLayer.Set(key, in color);
         }
 
         if (!_loggedFirst)
         {
             _loggedFirst = true;
-            Global.logger.Information("[ChromaCapture/Wyvrn] rendering 8x24->6x22 bilinear + GenericKeyboard, counter={Counter} [{BuildTag}]",
+            Global.logger.Information("[ChromaCapture/Wyvrn] rendering 8x24 exact per-key mapping, counter={Counter} [{BuildTag}]",
                 counter, ChromaEventModule.BuildTag);
         }
 
         return EffectLayer;
-    }
-
-    // Bilinear sample of the source 8×24 field at the centre of destination cell (dr,dc) of the 6×22 grid.
-    private System.Drawing.Color SampleBilinear(int dr, int dc)
-    {
-        var sy = (dr + 0.5) * SrcRows / DstRows - 0.5;
-        var sx = (dc + 0.5) * SrcCols / DstCols - 0.5;
-        var y0 = (int)Math.Floor(sy);
-        var x0 = (int)Math.Floor(sx);
-        var fy = sy - y0;
-        var fx = sx - x0;
-
-        var r = Lerp2(_r, x0, y0, fx, fy);
-        var g = Lerp2(_g, x0, y0, fx, fy);
-        var b = Lerp2(_b, x0, y0, fx, fy);
-        return CommonColorUtils.FastColor((byte)r, (byte)g, (byte)b);
-    }
-
-    private static double Lerp2(byte[] ch, int x0, int y0, double fx, double fy)
-    {
-        var x1 = Math.Clamp(x0 + 1, 0, SrcCols - 1);
-        var y1 = Math.Clamp(y0 + 1, 0, SrcRows - 1);
-        var cx0 = Math.Clamp(x0, 0, SrcCols - 1);
-        var cy0 = Math.Clamp(y0, 0, SrcRows - 1);
-        double c00 = ch[cy0 * SrcCols + cx0], c10 = ch[cy0 * SrcCols + x1];
-        double c01 = ch[y1 * SrcCols + cx0], c11 = ch[y1 * SrcCols + x1];
-        var top = c00 + (c10 - c00) * fx;
-        var bot = c01 + (c11 - c01) * fx;
-        return top + (bot - top) * fy;
     }
 
     private bool EnsureView()

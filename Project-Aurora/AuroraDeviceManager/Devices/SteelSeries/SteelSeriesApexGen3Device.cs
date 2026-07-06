@@ -17,9 +17,6 @@ public class SteelSeriesApexGen3Device : DefaultDevice
     private const int VendorId = 0x1038;
     private const int ReportLength = 642;
     private const byte SoftwareModeCommand = 0x4B;
-    private const byte OledCommand = 0x61;
-    private const int OledWidth = 128;
-    private const int OledHeight = 40;
 
     // Second report byte differs per model; the device ignores the frame when it is wrong.
     private static readonly (int Pid, byte ModelByte, string Model)[] SupportedDevices =
@@ -42,15 +39,14 @@ public class SteelSeriesApexGen3Device : DefaultDevice
     private readonly Stopwatch _statsWatch = Stopwatch.StartNew();
     private readonly Dictionary<byte, int> _hidSlot = new();
 
-    private bool _oledClock;
-    private int _lastClockMinute = -1;
+    private readonly ApexGen3Oled _oled = new();
 
     public override string DeviceName => "SteelSeries Apex Gen3";
 
     protected override void RegisterVariables(VariableRegistry variableRegistry)
     {
         base.RegisterVariables(variableRegistry);
-        variableRegistry.Register($"{DeviceName}_oled_clock", true, "Clock (HH:mm) on the OLED screen");
+        _oled.RegisterVariables(variableRegistry, DeviceName);
     }
 
     protected override string DeviceInfo => _deviceInfo;
@@ -85,8 +81,7 @@ public class SteelSeriesApexGen3Device : DefaultDevice
 
                 _deviceInfo = $"{model} (PID 0x{pid:X4})";
                 LogInfo($"connected to {_deviceInfo}, report length {reportLength}");
-                _oledClock = Global.DeviceConfig.VarRegistry.GetVariable<bool>($"{DeviceName}_oled_clock");
-                _lastClockMinute = -1;
+                _oled.Initialize(DeviceName);
                 IsInitialized = true;
                 return Task.FromResult(true);
             }
@@ -120,8 +115,7 @@ public class SteelSeriesApexGen3Device : DefaultDevice
         if (!IsInitialized || _stream == null)
             return Task.FromResult(false);
 
-        if (_oledClock)
-            UpdateOledClock();
+        _oled.Tick(_stream, _report.Length, LogError);
 
         _framesIn++;
         if (_statsWatch.ElapsedMilliseconds >= 10000)
@@ -206,126 +200,4 @@ public class SteelSeriesApexGen3Device : DefaultDevice
             return Task.FromResult(false);
         }
     }
-
-    // Replaces the GameSense-dependent gamesense-essentials clock. Protocol from apex-tux,
-    // probe-verified 2026-07-06: unnumbered feature report [0x00, 0x61, <bitmap>] padded to
-    // the max report length; bitmap is SSD1306 page-major (5 pages x 128 bytes, each byte
-    // 8 vertical pixels, bit 0 = topmost row of the page).
-    private void UpdateOledClock()
-    {
-        var now = DateTime.Now;
-        var minute = (int)(now.Ticks / TimeSpan.TicksPerMinute);
-        if (minute == _lastClockMinute)
-            return;
-
-        var report = new byte[_report.Length];
-        report[1] = OledCommand;
-        DrawClock(report, now);
-
-        try
-        {
-            _stream!.SetFeature(report);
-            _lastClockMinute = minute;
-        }
-        catch (Exception ex)
-        {
-            LogError("failed to write OLED clock", ex);
-            _lastClockMinute = minute; // do not retry every frame on a broken OLED path
-        }
-    }
-
-    // segment bits: 1=top 2=right-top 4=right-bottom 8=bottom 16=left-bottom 32=left-top 64=middle
-    private static readonly byte[] SevenSegment = [0b0111111, 0b0000110, 0b1011011, 0b1001111, 0b1100110, 0b1101101, 0b1111101, 0b0000111, 0b1111111, 0b1101111];
-
-    private static void DrawClock(byte[] report, DateTime now)
-    {
-        void FillRect(int x, int y, int w, int h)
-        {
-            for (var yy = y; yy < y + h; yy++)
-            for (var xx = x; xx < x + w; xx++)
-            {
-                if ((uint)xx >= OledWidth || (uint)yy >= OledHeight) continue;
-                report[2 + (yy >> 3) * OledWidth + xx] |= (byte)(1 << (yy & 7));
-            }
-        }
-
-        const int dw = 15, dh = 26, t = 3, top = 1;
-
-        void DrawDigit(int x, int d)
-        {
-            var s = SevenSegment[d];
-            if ((s & 1) != 0) FillRect(x, top, dw, t);
-            if ((s & 2) != 0) FillRect(x + dw - t, top, t, dh / 2);
-            if ((s & 4) != 0) FillRect(x + dw - t, top + dh / 2, t, dh / 2);
-            if ((s & 8) != 0) FillRect(x, top + dh - t, dw, t);
-            if ((s & 16) != 0) FillRect(x, top + dh / 2, t, dh / 2);
-            if ((s & 32) != 0) FillRect(x, top, t, dh / 2);
-            if ((s & 64) != 0) FillRect(x, top + dh / 2 - t / 2, dw, t);
-        }
-
-        var text = now.ToString("HHmm");
-        ReadOnlySpan<int> xs = [22, 43, 70, 91];
-        for (var i = 0; i < 4; i++)
-            DrawDigit(xs[i], text[i] - '0');
-        FillRect(62, top + 6, t, t);
-        FillRect(62, top + dh - 9, t, t);
-
-        // Abbreviated day name plus the Windows short-date format, centred under the time.
-        var date = $"{now:ddd} {now:d}".ToUpperInvariant();
-        var dateX = (OledWidth - date.Length * 6) / 2;
-        for (var i = 0; i < date.Length; i++)
-        {
-            if (!SmallFont.TryGetValue(date[i], out var glyph))
-                continue;
-            for (var c = 0; c < 5; c++)
-            for (var b = 0; b < 7; b++)
-                if ((glyph[c] & (1 << b)) != 0)
-                    FillRect(dateX + i * 6 + c, 32 + b, 1, 1);
-        }
-    }
-
-    // 5x7 column font (bit 0 = top) for short-date output: digits plus common separators.
-    private static readonly Dictionary<char, byte[]> SmallFont = new()
-    {
-        ['0'] = [0x3E, 0x51, 0x49, 0x45, 0x3E],
-        ['1'] = [0x00, 0x42, 0x7F, 0x40, 0x00],
-        ['2'] = [0x42, 0x61, 0x51, 0x49, 0x46],
-        ['3'] = [0x21, 0x41, 0x45, 0x4B, 0x31],
-        ['4'] = [0x18, 0x14, 0x12, 0x7F, 0x10],
-        ['5'] = [0x27, 0x45, 0x45, 0x45, 0x39],
-        ['6'] = [0x3C, 0x4A, 0x49, 0x49, 0x30],
-        ['7'] = [0x01, 0x71, 0x09, 0x05, 0x03],
-        ['8'] = [0x36, 0x49, 0x49, 0x49, 0x36],
-        ['9'] = [0x06, 0x49, 0x49, 0x29, 0x1E],
-        ['-'] = [0x08, 0x08, 0x08, 0x08, 0x08],
-        ['/'] = [0x20, 0x10, 0x08, 0x04, 0x02],
-        ['.'] = [0x00, 0x60, 0x60, 0x00, 0x00],
-        [' '] = [0x00, 0x00, 0x00, 0x00, 0x00],
-        ['A'] = [0x7E, 0x11, 0x11, 0x11, 0x7E],
-        ['B'] = [0x7F, 0x49, 0x49, 0x49, 0x36],
-        ['C'] = [0x3E, 0x41, 0x41, 0x41, 0x22],
-        ['D'] = [0x7F, 0x41, 0x41, 0x22, 0x1C],
-        ['E'] = [0x7F, 0x49, 0x49, 0x49, 0x41],
-        ['F'] = [0x7F, 0x09, 0x09, 0x09, 0x01],
-        ['G'] = [0x3E, 0x41, 0x49, 0x49, 0x7A],
-        ['H'] = [0x7F, 0x08, 0x08, 0x08, 0x7F],
-        ['I'] = [0x00, 0x41, 0x7F, 0x41, 0x00],
-        ['J'] = [0x20, 0x40, 0x41, 0x3F, 0x01],
-        ['K'] = [0x7F, 0x08, 0x14, 0x22, 0x41],
-        ['L'] = [0x7F, 0x40, 0x40, 0x40, 0x40],
-        ['M'] = [0x7F, 0x02, 0x0C, 0x02, 0x7F],
-        ['N'] = [0x7F, 0x04, 0x08, 0x10, 0x7F],
-        ['O'] = [0x3E, 0x41, 0x41, 0x41, 0x3E],
-        ['P'] = [0x7F, 0x09, 0x09, 0x09, 0x06],
-        ['Q'] = [0x3E, 0x41, 0x51, 0x21, 0x5E],
-        ['R'] = [0x7F, 0x09, 0x19, 0x29, 0x46],
-        ['S'] = [0x46, 0x49, 0x49, 0x49, 0x31],
-        ['T'] = [0x01, 0x01, 0x7F, 0x01, 0x01],
-        ['U'] = [0x3F, 0x40, 0x40, 0x40, 0x3F],
-        ['V'] = [0x1F, 0x20, 0x40, 0x20, 0x1F],
-        ['W'] = [0x3F, 0x40, 0x38, 0x40, 0x3F],
-        ['X'] = [0x63, 0x14, 0x08, 0x14, 0x63],
-        ['Y'] = [0x07, 0x08, 0x70, 0x08, 0x07],
-        ['Z'] = [0x61, 0x51, 0x49, 0x45, 0x43],
-    };
 }

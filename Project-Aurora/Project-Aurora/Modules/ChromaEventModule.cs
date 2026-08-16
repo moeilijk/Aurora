@@ -14,7 +14,7 @@ public sealed class ChromaEventModule : AuroraModule
     public static Task<ChromaEventReader> Reader => ReaderSource.Task;
 
     // Unique build/version stamp — bump on every rebuild so the log proves exactly which binary runs.
-    public const string BuildTag = "CHROMAEVENT-BUILD-0016";
+    public const string BuildTag = "CHROMAEVENT-BUILD-0017";
 
     private ChromaEventReader? _reader;
 

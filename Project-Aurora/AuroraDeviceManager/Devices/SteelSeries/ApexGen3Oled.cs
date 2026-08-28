@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Text;
 using Common.Devices;
 using HidSharp;
 using Windows.Media.Control;
@@ -17,6 +19,7 @@ internal sealed class ApexGen3Oled
     private const int VolumeOverlayMs = 1500;
     private const int MediaPollMs = 2000;
     private const int PeriodicClockPeriodS = 30; // last 5s of every 30s window shows the clock
+    private const int ScrollStartHoldMs = 1500;  // let the start of a new title settle before scrolling
 
     private bool _clock, _clockIcon, _clockPeriodic, _volume, _song, _songIcon, _songFlip;
     private string _separator = " - ";
@@ -24,6 +27,7 @@ internal sealed class ApexGen3Oled
 
     private byte[] _lastFrame = [];
     private bool _sendErrorLogged;
+    private bool _drawErrorLogged;
 
     private float _lastVol = -1;
     private bool _lastMute;
@@ -38,6 +42,10 @@ internal sealed class ApexGen3Oled
     private volatile bool _playing;
     private bool _mediaPollRunning;
     private bool _mediaBroken;
+    private int _mediaFailures;
+
+    private readonly Marquee _line1Scroll = new();
+    private readonly Marquee _line2Scroll = new();
 
     public void RegisterVariables(VariableRegistry registry, string dev)
     {
@@ -68,6 +76,11 @@ internal sealed class ApexGen3Oled
         _lastFrame = [];
         _lastVol = -1;
         _sendErrorLogged = false;
+        _drawErrorLogged = false;
+        _mediaBroken = false;
+        _mediaFailures = 0;
+        _line1Scroll.Reset();
+        _line2Scroll.Reset();
     }
 
     public void Tick(HidStream stream, int reportLength, Action<string, Exception> logError)
@@ -79,12 +92,26 @@ internal sealed class ApexGen3Oled
         var frame = new byte[reportLength];
         frame[1] = Command;
 
-        if (_volume && now < _volShownUntil)
-            DrawVolumeScreen(frame);
-        else if (_song && _playing && !(InPeriodicClockWindow(now) && _clock))
-            DrawSongScreen(frame, now);
-        else if (_clock)
-            DrawClockScreen(frame, now);
+        try
+        {
+            if (_volume && now < _volShownUntil)
+                DrawVolumeScreen(frame);
+            else if (_song && _playing && !(InPeriodicClockWindow(now) && _clock))
+                DrawSongScreen(frame, now);
+            else if (_clock)
+                DrawClockScreen(frame, now);
+        }
+        catch (Exception e)
+        {
+            // Tick runs at the head of the device update; a drawing fault must not take the
+            // colour frame down with it. Drop this frame and leave the panel on the last one.
+            if (!_drawErrorLogged)
+            {
+                logError("failed to draw OLED frame", e);
+                _drawErrorLogged = true;
+            }
+            return;
+        }
 
         if (_lastFrame.AsSpan().SequenceEqual(frame))
             return;
@@ -147,28 +174,112 @@ internal sealed class ApexGen3Oled
             try
             {
                 _smtc ??= await GlobalSystemMediaTransportControlsSessionManager.RequestAsync();
-                var session = _smtc.GetCurrentSession();
+
+                // GetCurrentSession() follows whatever Windows focused last, which is happily a
+                // paused Spotify while something else plays. Honour it when it is really playing,
+                // otherwise take the first session that is.
+                var current = _smtc.GetCurrentSession();
+                var session = IsPlaying(current) ? current : _smtc.GetSessions().FirstOrDefault(IsPlaying) ?? current;
+                _mediaFailures = 0;
+
                 if (session == null)
                 {
                     _playing = false;
                     return;
                 }
 
-                _playing = session.GetPlaybackInfo().PlaybackStatus ==
-                           GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
+                _playing = IsPlaying(session);
                 var props = await session.TryGetMediaPropertiesAsync();
-                _title = props.Title ?? "";
-                _artist = props.Artist ?? "";
+                _title = Sanitize(props.Title ?? "");
+                _artist = Sanitize(props.Artist ?? "");
             }
             catch
             {
-                _mediaBroken = true; // WinRT SMTC unavailable; leave the clock in charge
+                // SMTC can fail while the session manager is still coming up or a player exits
+                // mid-call; rebuild it and give up only once it keeps failing.
+                _smtc = null;
+                if (++_mediaFailures > 5)
+                    _mediaBroken = true;
             }
             finally
             {
                 _mediaPollRunning = false;
             }
         });
+    }
+
+    private static bool IsPlaying(GlobalSystemMediaTransportControlsSession? session)
+    {
+        try
+        {
+            return session?.GetPlaybackInfo()?.PlaybackStatus ==
+                   GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
+        }
+        catch
+        {
+            return false; // session torn down between enumerating and asking
+        }
+    }
+
+    // The 5x7 font is ASCII; fold what folds (e-acute -> e, curly quotes -> ') so foreign titles stay
+    // readable. Whatever is left renders as '?' in DrawText rather than a silent blank.
+    private static string Sanitize(string text)
+    {
+        if (text.All(c => c < 0x80))
+            return text;
+
+        try
+        {
+            var sb = new StringBuilder(text.Length);
+            foreach (var c in text.Normalize(NormalizationForm.FormD))
+            {
+                if (CharUnicodeInfo.GetUnicodeCategory(c) == UnicodeCategory.NonSpacingMark)
+                    continue;
+                if (Transliterations.TryGetValue(c, out var replacement))
+                    sb.Append(replacement);
+                else
+                    sb.Append(c);
+            }
+
+            return sb.ToString();
+        }
+        catch
+        {
+            return text; // malformed surrogates; DrawText falls back to '?' per character
+        }
+    }
+
+    // Scroll position is state, not a function of the wall clock. A clock-derived offset drops every
+    // new title halfway in (measured: 0 of 20 track changes started at the first character) and keeps
+    // running behind the periodic clock window and the volume overlay, which skipped 21 characters
+    // across one 5s window - wider than the 18-character viewport, so that text never reached the panel.
+    private sealed class Marquee
+    {
+        private string _text = "";
+        private int _offset;
+        private DateTime _nextAdvance = DateTime.MinValue;
+
+        public void Reset() => _text = "";
+
+        public int Advance(string looped, DateTime now, int tickMs, int startHoldMs)
+        {
+            if (!string.Equals(_text, looped, StringComparison.Ordinal))
+            {
+                _text = looped;
+                _offset = 0;
+                _nextAdvance = now.AddMilliseconds(startHoldMs);
+                return 0;
+            }
+
+            if (now < _nextAdvance)
+                return _offset;
+
+            _offset = (_offset + 1) % looped.Length;
+            // schedule from now, so a stretch where this line was not drawn pauses the marquee
+            // instead of letting it catch up over text nobody saw
+            _nextAdvance = now.AddMilliseconds(tickMs);
+            return _offset;
+        }
     }
 
     private void DrawVolumeScreen(byte[] frame)
@@ -199,13 +310,15 @@ internal sealed class ApexGen3Oled
             x1 = 14;
         }
 
-        DrawScrollingText(frame, x1, 8, Width - x1 - 2, line1, now);
-        DrawScrollingText(frame, 2, 24, Width - 4, line2, now);
+        DrawScrollingText(frame, x1, 8, Width - x1 - 2, line1, now, _line1Scroll);
+        DrawScrollingText(frame, 2, 24, Width - 4, line2, now, _line2Scroll);
     }
 
-    private void DrawScrollingText(byte[] frame, int x, int y, int avail, string text, DateTime now)
+    private void DrawScrollingText(byte[] frame, int x, int y, int avail, string text, DateTime now, Marquee marquee)
     {
         var maxChars = avail / 6;
+        if (maxChars <= 0)
+            return;
         if (text.Length <= maxChars)
         {
             DrawText(frame, x, y, text);
@@ -213,7 +326,7 @@ internal sealed class ApexGen3Oled
         }
 
         var looped = text + _separator;
-        var offset = (int)(now.Ticks / TimeSpan.TicksPerMillisecond / _tickMs) % looped.Length;
+        var offset = marquee.Advance(looped, now, _tickMs, ScrollStartHoldMs);
         Span<char> window = stackalloc char[maxChars];
         for (var i = 0; i < maxChars; i++)
             window[i] = looped[(offset + i) % looped.Length];
@@ -264,8 +377,9 @@ internal sealed class ApexGen3Oled
     {
         foreach (var raw in text)
         {
-            var ch = SmallFont.ContainsKey(raw) ? raw : char.ToUpperInvariant(raw);
-            if (SmallFont.TryGetValue(ch, out var glyph))
+            if (SmallFont.TryGetValue(raw, out var glyph) ||
+                SmallFont.TryGetValue(char.ToUpperInvariant(raw), out glyph) ||
+                SmallFont.TryGetValue('?', out glyph))
                 for (var c = 0; c < 5; c++)
                 for (var b = 0; b < 7; b++)
                     if ((glyph[c] & (1 << b)) != 0)
@@ -289,6 +403,21 @@ internal sealed class ApexGen3Oled
 
     // segment bits: 1=top 2=right-top 4=right-bottom 8=bottom 16=left-bottom 32=left-top 64=middle
     private static readonly byte[] SevenSegment = [0b0111111, 0b0000110, 0b1011011, 0b1001111, 0b1100110, 0b1101101, 0b1111101, 0b0000111, 0b1111111, 0b1101111];
+
+    // Characters FormD does not decompose, plus the typography players like to put in titles.
+    private static readonly Dictionary<char, string> Transliterations = new()
+    {
+        ['\u00A0'] = " ", ['\u2007'] = " ", ['\u202F'] = " ",
+        ['\u2018'] = "'", ['\u2019'] = "'", ['\u201A'] = ",", ['\u2032'] = "'",
+        ['\u201C'] = "\"", ['\u201D'] = "\"", ['\u201E'] = "\"", ['\u2033'] = "\"",
+        ['\u2010'] = "-", ['\u2011'] = "-", ['\u2012'] = "-", ['\u2013'] = "-", ['\u2014'] = "-", ['\u2015'] = "-",
+        ['\u2026'] = "...",
+        ['\u00D7'] = "x", ['\u00B7'] = ".", ['\u2022'] = ".",
+        ['\u00DF'] = "ss", ['\u00E6'] = "ae", ['\u00C6'] = "AE", ['\u0153'] = "oe", ['\u0152'] = "OE",
+        ['\u00F8'] = "o", ['\u00D8'] = "O", ['\u0142'] = "l", ['\u0141'] = "L",
+        ['\u00F0'] = "d", ['\u00D0'] = "D", ['\u00FE'] = "th", ['\u00DE'] = "Th",
+        ['\u0111'] = "d", ['\u0110'] = "D", ['\u0131'] = "i",
+    };
 
     // 5x7 column font (bit 0 = top)
     private static readonly Dictionary<char, byte[]> SmallFont = new()

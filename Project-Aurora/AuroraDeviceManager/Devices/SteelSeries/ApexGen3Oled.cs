@@ -19,11 +19,10 @@ internal sealed class ApexGen3Oled
     private const int VolumeOverlayMs = 1500;
     private const int MediaPollMs = 2000;
     private const int PeriodicClockPeriodS = 30; // last 5s of every 30s window shows the clock
-    private const int ScrollStartHoldMs = 1500;  // let the start of a new title settle before scrolling
 
     private bool _clock, _clockIcon, _clockPeriodic, _volume, _song, _songIcon, _songFlip;
-    private string _separator = " - ";
     private int _tickMs = 250;
+    private int _scrollHoldMs = 2000;
 
     private byte[] _lastFrame = [];
     private bool _sendErrorLogged;
@@ -56,8 +55,8 @@ internal sealed class ApexGen3Oled
         registry.Register($"{dev}_oled_song", true, "OLED: song information while music plays");
         registry.Register($"{dev}_oled_song_icon", true, "OLED: song icon");
         registry.Register($"{dev}_oled_song_flip", false, "OLED: artist above title");
-        registry.Register($"{dev}_oled_song_separator", " - ", "OLED: scrolling separator");
         registry.Register($"{dev}_oled_tick_ms", 250, "OLED: scroll tick (ms)");
+        registry.Register($"{dev}_oled_scroll_hold_ms", 2000, "OLED: pause at the start and end of a scroll (ms)");
     }
 
     public void Initialize(string dev)
@@ -70,9 +69,8 @@ internal sealed class ApexGen3Oled
         _song = vars.GetVariable<bool>($"{dev}_oled_song");
         _songIcon = vars.GetVariable<bool>($"{dev}_oled_song_icon");
         _songFlip = vars.GetVariable<bool>($"{dev}_oled_song_flip");
-        var separator = vars.GetString($"{dev}_oled_song_separator");
-        _separator = string.IsNullOrEmpty(separator) ? " - " : separator;
         _tickMs = Math.Max(50, vars.GetVariable<int>($"{dev}_oled_tick_ms"));
+        _scrollHoldMs = Math.Max(0, vars.GetVariable<int>($"{dev}_oled_scroll_hold_ms"));
         _lastFrame = [];
         _lastVol = -1;
         _sendErrorLogged = false;
@@ -249,10 +247,13 @@ internal sealed class ApexGen3Oled
         }
     }
 
-    // Scroll position is state, not a function of the wall clock. A clock-derived offset drops every
-    // new title halfway in (measured: 0 of 20 track changes started at the first character) and keeps
-    // running behind the periodic clock window and the volume overlay, which skipped 21 characters
-    // across one 5s window - wider than the 18-character viewport, so that text never reached the panel.
+    // Scroll position is state, not a function of the wall clock, and the sweep stops at both ends.
+    // A wrap-around marquee never stands still: it flicks from the tail straight back into the head and
+    // keeps going, which is unreadable on a 128px panel. This holds on the first window, steps to the
+    // last full window, holds there, then snaps back to the start and holds again.
+    // A clock-derived offset also dropped every new title halfway in (0 of 20 track changes started at
+    // the first character) and kept running behind the periodic clock window, skipping 21 characters
+    // across one 5s window - wider than the viewport, so that text never reached the panel at all.
     private sealed class Marquee
     {
         private string _text = "";
@@ -261,23 +262,32 @@ internal sealed class ApexGen3Oled
 
         public void Reset() => _text = "";
 
-        public int Advance(string looped, DateTime now, int tickMs, int startHoldMs)
+        public int Advance(string text, int maxChars, DateTime now, int tickMs, int holdMs)
         {
-            if (!string.Equals(_text, looped, StringComparison.Ordinal))
+            var last = Math.Max(0, text.Length - maxChars);
+
+            if (!string.Equals(_text, text, StringComparison.Ordinal))
             {
-                _text = looped;
+                _text = text;
                 _offset = 0;
-                _nextAdvance = now.AddMilliseconds(startHoldMs);
+                _nextAdvance = now.AddMilliseconds(holdMs);
                 return 0;
             }
 
             if (now < _nextAdvance)
                 return _offset;
 
-            _offset = (_offset + 1) % looped.Length;
-            // schedule from now, so a stretch where this line was not drawn pauses the marquee
-            // instead of letting it catch up over text nobody saw
-            _nextAdvance = now.AddMilliseconds(tickMs);
+            if (_offset >= last)
+            {
+                _offset = 0; // end reached and held; back to the start for another hold
+                _nextAdvance = now.AddMilliseconds(holdMs);
+                return _offset;
+            }
+
+            _offset++;
+            // Schedule from now, so a stretch where this line was not drawn (clock window, volume
+            // overlay) pauses the marquee instead of catching up over text nobody saw.
+            _nextAdvance = now.AddMilliseconds(_offset >= last ? holdMs : tickMs);
             return _offset;
         }
     }
@@ -325,12 +335,8 @@ internal sealed class ApexGen3Oled
             return;
         }
 
-        var looped = text + _separator;
-        var offset = marquee.Advance(looped, now, _tickMs, ScrollStartHoldMs);
-        Span<char> window = stackalloc char[maxChars];
-        for (var i = 0; i < maxChars; i++)
-            window[i] = looped[(offset + i) % looped.Length];
-        DrawText(frame, x, y, new string(window));
+        var offset = marquee.Advance(text, maxChars, now, _tickMs, _scrollHoldMs);
+        DrawText(frame, x, y, text.Substring(offset, maxChars));
     }
 
     private void DrawClockScreen(byte[] frame, DateTime now)
